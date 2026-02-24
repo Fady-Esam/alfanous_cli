@@ -1,0 +1,14 @@
+name: alfanous_core
+description: A standalone business logic and database engine for the Alfanous Quran Search Engine.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  sqlite3: ^2.4.6
+  args: ^2.6.0
+
+dev_dependencies:
+  lints: ^3.0.0
