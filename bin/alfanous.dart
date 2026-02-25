@@ -31,6 +31,13 @@ void main(List<String> arguments) {
     }
 
     final searchCmd = argResults.command!;
+    if (searchCmd.rest.isNotEmpty) {
+      stdout.writeln(
+          '\x1B[31mError: Unrecognized arguments or separated options found: ${searchCmd.rest.join(' ')}\nDid you add an accidental space exactly like "-- limit"?\x1B[0m');
+      _printUsage(parser);
+      exit(64);
+    }
+
     final query = searchCmd['query'] ?? argResults['query'];
     final finalQuery = query as String?;
 

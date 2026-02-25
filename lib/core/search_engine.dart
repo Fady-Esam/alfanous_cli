@@ -39,6 +39,7 @@ class SearchEngine {
   }
 
   Future<int> getTotalSearchCount(String query) async {
+    // Preprocess: sanitize and execute normalizer constraints (done within the parser natively)
     final parsed = await _parser.parse(query);
     if (parsed.isEmpty) return 0;
 
@@ -53,7 +54,7 @@ class SearchEngine {
       return 0;
     } on SqliteException catch (e) {
       if (_isFtsQueryError(e)) {
-        return _fallbackCount(parsed.highlightTerms);
+        return _fallbackCount(parsed.fallbackGroups);
       }
       return 0;
     } finally {
@@ -61,22 +62,34 @@ class SearchEngine {
     }
   }
 
-  int _fallbackCount(List<String> highlightTerms) {
-    final fallbackWord = highlightTerms.isNotEmpty ? highlightTerms.first : '';
-    if (fallbackWord.isEmpty) return 0;
+  int _fallbackCount(List<List<String>> fallbackGroups) {
+    if (fallbackGroups.isEmpty) return 0;
 
-    PreparedStatement? stmt;
+    // For fallback, we'll try to match ALL terms with standard LIKE queries
     try {
-      stmt = _db
-          .prepare('SELECT COUNT(*) AS count FROM aya WHERE standard LIKE ?');
-      final result = stmt.select(['%$fallbackWord%']);
+      var sql = 'SELECT COUNT(*) AS count FROM aya WHERE 1=1';
+      final params = <String>[];
+      for (final group in fallbackGroups) {
+        if (group.isEmpty) continue;
+        sql += ' AND (';
+        bool first = true;
+        for (final term in group) {
+          if (!first) sql += ' OR ';
+          sql += 'standard LIKE ?';
+          params.add('%$term%');
+          first = false;
+        }
+        sql += ')';
+      }
+
+      final stmt = _db.prepare(sql);
+      final result = stmt.select(params);
+      stmt.dispose();
+
       if (result.isNotEmpty) {
         return result.first['count'] as int? ?? 0;
       }
-    } catch (_) {
-    } finally {
-      stmt?.dispose();
-    }
+    } catch (_) {}
     return 0;
   }
 
@@ -120,29 +133,50 @@ class SearchEngine {
       return items;
     } on SqliteException catch (e) {
       if (_isFtsQueryError(e)) {
-        return _fallbackSearch(parsed.highlightTerms, limit, offset);
+        return _fallbackSearch(
+            parsed.fallbackGroups, parsed.highlightTerms, limit, offset);
       }
-      throw QueryExecutionException('Failed to execute FTS5 search.', e);
+      throw QueryExecutionException(
+          'Failed to execute FTS5 search. Match Expr: \${parsed.matchExpression}',
+          e);
     } finally {
       stmt?.dispose();
     }
   }
 
-  List<SearchResultItem> _fallbackSearch(
+  List<SearchResultItem> _fallbackSearch(List<List<String>> fallbackGroups,
       List<String> highlightTerms, int limit, int offset) {
-    final fallbackWord = highlightTerms.isNotEmpty ? highlightTerms.first : '';
-    if (fallbackWord.isEmpty) return [];
+    if (fallbackGroups.isEmpty) return [];
 
-    PreparedStatement? stmt;
     try {
-      stmt = _db.prepare('''
+      var sql = '''
         SELECT 
           sura_id, aya_id, standard AS text, sura_name
         FROM aya
-        WHERE standard LIKE ?
-        LIMIT ? OFFSET ?
-      ''');
-      final resultSet = stmt.select(['%$fallbackWord%', limit, offset]);
+        WHERE 1=1
+      ''';
+
+      final params = <dynamic>[];
+      for (final group in fallbackGroups) {
+        if (group.isEmpty) continue;
+        sql += ' AND (';
+        bool first = true;
+        for (final term in group) {
+          if (!first) sql += ' OR ';
+          sql += 'standard LIKE ?';
+          params.add('%$term%');
+          first = false;
+        }
+        sql += ')';
+      }
+
+      sql += ' LIMIT ? OFFSET ?';
+      params.addAll([limit, offset]);
+
+      final stmt = _db.prepare(sql);
+      final resultSet = stmt.select(params);
+      stmt.dispose();
+
       final items = <SearchResultItem>[];
 
       for (final row in resultSet) {
@@ -159,8 +193,6 @@ class SearchEngine {
       return items;
     } catch (_) {
       return [];
-    } finally {
-      stmt?.dispose();
     }
   }
 
